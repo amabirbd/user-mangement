@@ -2,6 +2,18 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const asyncHandler = require("express-async-handler");
 const prisma = require("../../prisma");
+const nodemailer = require("nodemailer");
+const crypto = require('crypto');
+
+const transporter = nodemailer.createTransport({
+  // Specify your email service provider and authentication details
+  service: "Gmail",
+  auth: {
+    user: `${process.env.MAILER_EMAIL}`,
+    pass: `${process.env.MAILER_PASSWORD}`,
+  },
+});
+
 
 const createUser = asyncHandler(async (req, res) => {
   // Check if the user making the request is authorized to create a new user
@@ -16,6 +28,7 @@ const createUser = asyncHandler(async (req, res) => {
 
     // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
+    const verificationToken = crypto.randomBytes(20).toString("hex");
 
     const newUser = await prisma.user.create({
       data: {
@@ -23,7 +36,25 @@ const createUser = asyncHandler(async (req, res) => {
         email,
         password: hashedPassword,
         role,
+        verificationToken
       },
+    });
+
+    //send verification mail to user
+    const mailOptions = {
+      from: "abir4u2011@gmail.com",
+      to: user.email,
+      subject: "Email Verification",
+      html: `<p>Please click the following link to verify your email:</p>
+             <p><a href="http://your-app.com/verify_email/${verificationToken}">Verify Email</a></p>`,
+    };
+
+    transporter.sendMail(mailOptions, (error, info) => {
+      if (error) {
+        console.error("Error sending verification email: ", error);
+      } else {
+        console.log("Verification email sent: ", info.response);
+      }
     });
 
     res.json(newUser);
@@ -31,6 +62,33 @@ const createUser = asyncHandler(async (req, res) => {
     res.status(500).json({ message: "Error creating user" });
   }
 });
+
+const verifyEmail = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    // Find the user by the verification token
+    const user = await prisma.user.findUnique({
+      where: { verificationToken: token },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Update the user's verification status in the database
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { isVerified: true },
+    });
+
+    res.json({ message: "User verified successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error verifying user" });
+  }
+});
+
 
 const getAllUsers = asyncHandler(async (req, res) => {
   // Check if the user making the request is authorized to read all users
@@ -175,12 +233,87 @@ const signIn = asyncHandler(async (req, res) => {
   }
 });
 
-// // Generate JWT
-// const generateToken = (id) => {
-//   return jwt.sign({ id }, process.env.JWT_SECRET, {
-//     expiresIn: "30d",
-//   });
-// };
+// const verification = asyncHandler(async (req, res) => {
+
+// })
+
+const reqResetPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    // Find the user by email
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Generate a password reset token
+    const resetToken = crypto.randomBytes(20).toString('hex');
+
+    // Update the user's password reset token and save it to the database
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { resetToken },
+    });
+
+    // Send password reset email to the user
+    const mailOptions = {
+      from: 'abir4u2011@gmail.com',
+      to: user.email,
+      subject: 'Password Reset',
+      html: `<p>Please click the following link to reset your password:</p>
+             <p><a href="http://your-app.com/reset-password/${resetToken}">Reset Password</a></p>`,
+    };
+
+    transporter.sendMail(mailOptions, (error, info) => {
+      if (error) {
+        console.error('Error sending password reset email:', error);
+        return res.status(500).json({ message: 'Error sending password reset email' });
+      }
+      console.log('Password reset email sent:', info.response);
+      res.json({ message: 'Password reset email sent' });
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Error resetting password' });
+  }
+});
+
+const resetPassword = asyncHandler(async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  try {
+    // Find the user by the reset token
+    const user = await prisma.user.findUnique({
+      where: { resetToken: token },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+
+    // Update the user's password and clear the reset token
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedNewPassword,
+        resetToken: null,
+      },
+    });
+
+    res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Error resetting password' });
+  }
+});
+
 
 module.exports = {
   createUser,
@@ -190,4 +323,7 @@ module.exports = {
   deleteUser,
   signUp,
   signIn,
+  reqResetPassword,
+  resetPassword,
+  verifyEmail
 };

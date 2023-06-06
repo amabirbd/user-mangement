@@ -14,6 +14,9 @@ model User {
   email     String   @unique
   password  String
   role      Role
+  verificationToken String
+  isVerified        Boolean  @default(false)
+  resetToken String
 }
 
 enum Role {
